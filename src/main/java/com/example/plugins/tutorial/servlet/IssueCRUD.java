@@ -1,264 +1,222 @@
 package com.example.plugins.tutorial.servlet;
 
-import com.atlassian.crowd.embedded.api.User;
 import com.atlassian.jira.bc.issue.IssueService;
 import com.atlassian.jira.bc.issue.search.SearchService;
 import com.atlassian.jira.bc.project.ProjectService;
+import com.atlassian.jira.config.ConstantsManager;
 import com.atlassian.jira.issue.Issue;
 import com.atlassian.jira.issue.IssueInputParameters;
 import com.atlassian.jira.issue.MutableIssue;
+import com.atlassian.jira.issue.issuetype.IssueType;
 import com.atlassian.jira.issue.search.SearchException;
+import com.atlassian.jira.issue.search.SearchResults;
 import com.atlassian.jira.jql.builder.JqlClauseBuilder;
 import com.atlassian.jira.jql.builder.JqlQueryBuilder;
 import com.atlassian.jira.project.Project;
+import com.atlassian.jira.security.JiraAuthenticationContext;
+import com.atlassian.jira.user.ApplicationUser;
 import com.atlassian.jira.web.bean.PagerFilter;
-import com.atlassian.sal.api.user.UserManager;
+import com.atlassian.plugin.spring.scanner.annotation.component.Scanned;
+import com.atlassian.plugin.spring.scanner.annotation.imports.JiraImport;
+import com.atlassian.query.Query;
 import com.atlassian.templaterenderer.TemplateRenderer;
-import com.google.common.collect.Maps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
+@Scanned
 public class IssueCRUD extends HttpServlet {
     private static final Logger log = LoggerFactory.getLogger(IssueCRUD.class);
-    private IssueService issueService;
-    private ProjectService projectService;
-    private SearchService searchService;
-    private UserManager userManager;
-    private TemplateRenderer renderer;
-    private static final String LIST_BROWSER_TEMPLATE = "/templates/list.vm";
-    private static final String NEW_BROWSER_TEMPLATE = "/templates/new.vm";
-    private static final String EDIT_BROWSER_TEMPLATE = "/templates/edit.vm";
-    private com.atlassian.jira.user.util.UserManager jiraUserManager;
 
-    /**
-     * Servlet constructor that is auto-wired by Spring to include the following services registered
-     * in the params.
-     *
-     * @param issueService
-     * @param projectService
-     * @param searchService
-     * @param userManager
-     * @param jiraUserManager
-     * @param templateRenderer
-     */
-    public IssueCRUD(IssueService issueService, ProjectService projectService, SearchService searchService,
-                     UserManager userManager, com.atlassian.jira.user.util.UserManager jiraUserManager,
-                     TemplateRenderer templateRenderer) {
+    @JiraImport
+    private IssueService issueService;
+    @JiraImport
+    private ProjectService projectService;
+    @JiraImport
+    private SearchService searchService;
+    @JiraImport
+    private TemplateRenderer templateRenderer;
+    @JiraImport
+    private JiraAuthenticationContext authenticationContext;
+    @JiraImport
+    private ConstantsManager constantsManager;
+
+    private static final String LIST_ISSUES_TEMPLATE = "/templates/list.vm";
+    private static final String NEW_ISSUE_TEMPLATE = "/templates/new.vm";
+    private static final String EDIT_ISSUE_TEMPLATE = "/templates/edit.vm";
+
+    public IssueCRUD(IssueService issueService, ProjectService projectService,
+                     SearchService searchService,
+                     TemplateRenderer templateRenderer,
+                     JiraAuthenticationContext authenticationContext,
+                     ConstantsManager constantsManager) {
         this.issueService = issueService;
         this.projectService = projectService;
         this.searchService = searchService;
-        this.userManager = userManager;
-        this.renderer = templateRenderer;
-        this.jiraUserManager = jiraUserManager;
+        this.templateRenderer = templateRenderer;
+        this.authenticationContext = authenticationContext;
+        this.constantsManager = constantsManager;
     }
 
-    /**
-     * GET method for servlet handles both showing a list of issues, the new issue page, and the edit issue page
-     *
-     * @param req
-     * @param resp
-     * @throws ServletException
-     * @throws IOException
-     */
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        String action = Optional.ofNullable(req.getParameter("actionType")).orElse("");
 
-        if ("y".equals(req.getParameter("new"))) {
-            // Renders new.vm template if the "new" parameter is passed
-
-            // Create an empty context map to pass into the render method
-            Map<String, Object> context = Maps.newHashMap();
-            // Make sure to set the contentType otherwise bad things happen
-            resp.setContentType("text/html;charset=utf-8");
-            // Render the velocity template (new.vm). Since the new.vm template doesn't need to render
-            // any in dynamic content, we just pass it an empty context
-            renderer.render(NEW_BROWSER_TEMPLATE, context, resp.getWriter());
-        } else if ("y".equals(req.getParameter("edit"))) {
-            // Renders edit.vm template if the "edit" parameter is passed
-
-            // Retrieve issue with the specified key
-            IssueService.IssueResult issue = issueService.getIssue(getCurrentUser(req), req.getParameter("key"));
-            Map<String, Object> context = Maps.newHashMap();
-            context.put("issue", issue.getIssue());
-            resp.setContentType("text/html;charset=utf-8");
-            // Render the template with the issue inside the context
-            renderer.render(EDIT_BROWSER_TEMPLATE, context, resp.getWriter());
-        } else {
-            // Render the list of issues (list.vm) if no params are passed in
-            List<Issue> issues = getIssues(req);
-            Map<String, Object> context = Maps.newHashMap();
-            context.put("issues", issues);
-            resp.setContentType("text/html;charset=utf-8");
-            // Pass in the list of issues as the context
-            renderer.render(LIST_BROWSER_TEMPLATE, context, resp.getWriter());
+        Map<String, Object> context = new HashMap<>();
+        resp.setContentType("text/html;charset=utf-8");
+        switch (action) {
+            case "new":
+                templateRenderer.render(NEW_ISSUE_TEMPLATE, context, resp.getWriter());
+                break;
+            case "edit":
+                IssueService.IssueResult issueResult = issueService.getIssue(authenticationContext.getLoggedInUser(),
+                        req.getParameter("key"));
+                context.put("issue", issueResult.getIssue());
+                templateRenderer.render(EDIT_ISSUE_TEMPLATE, context, resp.getWriter());
+                break;
+            default:
+                List<Issue> issues = getIssues();
+                context.put("issues", issues);
+                templateRenderer.render(LIST_ISSUES_TEMPLATE, context, resp.getWriter());
         }
+
     }
 
     /**
-     * Returns a list of issues used to populate the list.vm template in the GET request
+     * Retrieve issues using simple JQL query project="TUTORIAL"
+     * Pagination is set to unlimited
      *
-     * @param req
-     * @return
+     * @return List of issues
      */
-    private List<Issue> getIssues(HttpServletRequest req) {
-        // User is required to carry out a search
-        User user = getCurrentUser(req);
+    private List<Issue> getIssues() {
 
-        // search issues
-
-        // The search interface requires JQL clause... so let's build one
+        ApplicationUser user = authenticationContext.getLoggedInUser();
         JqlClauseBuilder jqlClauseBuilder = JqlQueryBuilder.newClauseBuilder();
-        // Our JQL clause is simple project="TUTORIAL"
-        com.atlassian.query.Query query = jqlClauseBuilder.project("TUTORIAL").buildQuery();
-        // A page filter is used to provide pagination. Let's use an unlimited filter to
-        // to bypass pagination.
+        Query query = jqlClauseBuilder.project("TUTORIAL").buildQuery();
         PagerFilter pagerFilter = PagerFilter.getUnlimitedFilter();
-        com.atlassian.jira.issue.search.SearchResults searchResults = null;
+
+        SearchResults searchResults = null;
         try {
-            // Perform search results
             searchResults = searchService.search(user, query, pagerFilter);
         } catch (SearchException e) {
             e.printStackTrace();
         }
-        // return the results
-        return searchResults.getIssues();
+        return searchResults != null ? searchResults.getIssues() : null;
     }
 
-    /**
-     * Helper method for getting the current user
-     *
-     * @param req
-     * @return
-     */
-    private User getCurrentUser(HttpServletRequest req) {
-        // To get the current user, we first get the username from the session.
-        // Then we pass that over to the jiraUserManager in order to get an
-        // actual User object.
-        return jiraUserManager.getUser(userManager.getRemoteUsername(req));
-    }
-
-    /**
-     * POST method for servlet handles creating new issues and updating existing issues
-     *
-     * @param req
-     * @param resp
-     * @throws ServletException
-     * @throws IOException
-     */
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        Map params = req.getParameterMap();
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        String actionType = req.getParameter("actionType");
 
-        User user = getCurrentUser(req);
-
-        if ("y".equals(req.getParameter("edit"))) {
-            // Perform update if the "edit" param is passed in
-            // First get the issue from the key that's passed in
-            IssueService.IssueResult issueResult = issueService.getIssue(user, req.getParameter("key"));
-            MutableIssue issue = issueResult.getIssue();
-            // Next we need to validate the updated issue
-            IssueInputParameters issueInputParameters = issueService.newIssueInputParameters();
-            issueInputParameters.setSummary(req.getParameter("summary"));
-            issueInputParameters.setDescription(req.getParameter("description"));
-            IssueService.UpdateValidationResult result = issueService.validateUpdate(user, issue.getId(),
-                    issueInputParameters);
-
-            if (result.getErrorCollection().hasAnyErrors()) {
-                // If the validation fails, we re-render the edit page with the errors in the context
-                Map<String, Object> context = Maps.newHashMap();
-                context.put("issue", issue);
-                context.put("errors", result.getErrorCollection().getErrors());
-                resp.setContentType("text/html;charset=utf-8");
-                renderer.render(EDIT_BROWSER_TEMPLATE, context, resp.getWriter());
-            } else {
-                // If the validation passes, we perform the update then redirect the user back to the
-                // page with the list of issues
-                issueService.update(user, result);
-                resp.sendRedirect("issuecrud");
-            }
-
-        } else {
-            // Perform creation if the "new" param is passed in
-            // First we need to validate the new issue being created
-            IssueInputParameters issueInputParameters = issueService.newIssueInputParameters();
-            // We're only going to set the summary and description. The rest are hard-coded to
-            // simplify this tutorial.
-            issueInputParameters.setSummary(req.getParameter("summary"));
-            issueInputParameters.setDescription(req.getParameter("description"));
-            // We need to set the assignee, reporter, project, and issueType...
-            // For assignee and reporter, we'll just use the currentUser
-            issueInputParameters.setAssigneeId(user.getName());
-            issueInputParameters.setReporterId(user.getName());
-            // We hard-code the project name to be the project with the TUTORIAL key
-            Project project = projectService.getProjectByKey(user, "TUTORIAL").getProject();
-            issueInputParameters.setProjectId(project.getId());
-            // We also hard-code the issueType to be a "bug" == 1
-            issueInputParameters.setIssueTypeId("1");
-            // Perform the validation
-            IssueService.CreateValidationResult result = issueService.validateCreate(user, issueInputParameters);
-
-            if (result.getErrorCollection().hasAnyErrors()) {
-                // If the validation fails, render the list of issues with the error in a flash message
-                List<Issue> issues = getIssues(req);
-                Map<String, Object> context = Maps.newHashMap();
-                context.put("issues", issues);
-                context.put("errors", result.getErrorCollection().getErrors());
-                resp.setContentType("text/html;charset=utf-8");
-                renderer.render(LIST_BROWSER_TEMPLATE, context, resp.getWriter());
-            } else {
-                // If the validation passes, redirect the user to the main issue list page
-                issueService.create(user, result);
-                resp.sendRedirect("issuecrud");
-            }
+        switch (actionType) {
+            case "edit":
+                handleIssueEdit(req, resp);
+                break;
+            case "new":
+                handleIssueCreation(req, resp);
+                break;
+            default:
+                resp.sendError(HttpServletResponse.SC_NOT_FOUND);
         }
     }
 
-    /**
-     * DELETE method handles AJAX based deletion of issues. Returns JSON status.
-     *
-     * @param req
-     * @param resp
-     * @throws ServletException
-     * @throws IOException
-     */
+    private void handleIssueEdit(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+
+        ApplicationUser user = authenticationContext.getLoggedInUser();
+
+        Map<String, Object> context = new HashMap<>();
+
+        IssueInputParameters issueInputParameters = issueService.newIssueInputParameters();
+        issueInputParameters.setSummary(req.getParameter("summary"))
+                .setDescription(req.getParameter("description"));
+
+        MutableIssue issue = issueService.getIssue(user, req.getParameter("key")).getIssue();
+
+        IssueService.UpdateValidationResult result =
+                issueService.validateUpdate(user, issue.getId(), issueInputParameters);
+
+        if (result.getErrorCollection().hasAnyErrors()) {
+            context.put("issue", issue);
+            context.put("errors", result.getErrorCollection().getErrors());
+            resp.setContentType("text/html;charset=utf-8");
+            templateRenderer.render(EDIT_ISSUE_TEMPLATE, context, resp.getWriter());
+        } else {
+            issueService.update(user, result);
+            resp.sendRedirect("issuecrud");
+        }
+    }
+
+    private void handleIssueCreation(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        ApplicationUser user = authenticationContext.getLoggedInUser();
+
+        Map<String, Object> context = new HashMap<>();
+
+        Project project = projectService.getProjectByKey(user, "TUTORIAL").getProject();
+
+        if (project == null) {
+            context.put("errors", Collections.singletonList("Project doesn't exist"));
+            templateRenderer.render(LIST_ISSUES_TEMPLATE, context, resp.getWriter());
+            return;
+        }
+
+        IssueType taskIssueType = constantsManager.getAllIssueTypeObjects().stream().filter(
+                issueType -> issueType.getName().equalsIgnoreCase("task")).findFirst().orElse(null);
+
+        if(taskIssueType == null) {
+            context.put("errors", Collections.singletonList("Can't find Task issue type"));
+            templateRenderer.render(LIST_ISSUES_TEMPLATE, context, resp.getWriter());
+            return;
+        }
+
+        IssueInputParameters issueInputParameters = issueService.newIssueInputParameters();
+        issueInputParameters.setSummary(req.getParameter("summary"))
+                .setDescription(req.getParameter("description"))
+                .setAssigneeId(user.getName())
+                .setReporterId(user.getName())
+                .setProjectId(project.getId())
+                .setIssueTypeId(taskIssueType.getId());
+
+        IssueService.CreateValidationResult result = issueService.validateCreate(user, issueInputParameters);
+
+        if (result.getErrorCollection().hasAnyErrors()) {
+            List<Issue> issues = getIssues();
+            context.put("issues", issues);
+            context.put("errors", result.getErrorCollection().getErrors());
+            resp.setContentType("text/html;charset=utf-8");
+            templateRenderer.render(LIST_ISSUES_TEMPLATE, context, resp.getWriter());
+        } else {
+            issueService.create(user, result);
+            resp.sendRedirect("issuecrud");
+        }
+    }
+
+
     @Override
-    protected void doDelete(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        User user = getCurrentUser(req);
-
-        // This will be the output string that we will put the JSON in
-        String respStr = "";
-
-        // Retrieve the issue with the specified key
-        IssueService.IssueResult issue = issueService.getIssue(user, req.getParameter("key"));
-
-        if (issue.isValid()) {
-            // If the issue is found, let's delete it...
-
-            // ... but first, we must validate that user can delete issue
-            IssueService.DeleteValidationResult result = issueService.validateDelete(user, issue.getIssue().getId());
+    protected void doDelete(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        ApplicationUser user = authenticationContext.getLoggedInUser();
+        String respStr;
+        IssueService.IssueResult issueResult = issueService.getIssue(user, req.getParameter("key"));
+        if (issueResult.isValid()) {
+            IssueService.DeleteValidationResult result = issueService.validateDelete(user, issueResult.getIssue().getId());
             if (result.getErrorCollection().hasAnyErrors()) {
-                // If the validation fails, we send the error back to the user in a JSON payload
                 respStr = "{ \"success\": \"false\", error: \"" + result.getErrorCollection().getErrors().get(0) + "\" }";
             } else {
-                // If the validation passes, we perform the delete, then return a success msg back to the user
                 issueService.delete(user, result);
                 respStr = "{ \"success\" : \"true\" }";
             }
         } else {
-            // The issue can't be found... so we send an error to the user
             respStr = "{ \"success\" : \"false\", error: \"Couldn't find issue\"}";
         }
-        // We set the content-type to application/json here so that the AJAX client knows how to deal with it
         resp.setContentType("application/json;charset=utf-8");
-        // Send the raw output string we put together
         resp.getWriter().write(respStr);
     }
 }
